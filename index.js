@@ -1,20 +1,20 @@
 // 1. Impor library
 const express = require('express');
 const mysql = require('mysql2/promise');
-const cors = require('cors'); 
+const cors = require('cors');
 const app = express();
 
 // 2. Aktifkan CORS
 app.use(cors());
 
 // 3. Hubungkan ke Database Railway (Otomatis)
-// Menggunakan hostname INTERNAL yang paling andal dan port default 3306
+// Ini adalah cara yang BENAR. Kita biarkan Railway mengisi variabelnya.
 const dbPool = mysql.createPool({
-  host: 'mysql.railway.internal', // <-- HOSTNAME INTERNAL PALING ANDAL
-  port: 3306, // <-- PORT INTERNAL
-  user: 'root',
-  password: 'SKFYICRESSqYSlMWlNYMGtAZrKMCHiVc', // Password Anda
-  database: 'railway' // Nama database Anda
+  host: process.env.MYSQLHOST,
+  port: process.env.MYSQLPORT,
+  user: process.env.MYSQLUSER,
+  password: process.env.MYSQLPASSWORD,
+  database: process.env.MYSQLDATABASE
 });
 
 // 4. Endpoint API (yang akan dipanggil Flutter)
@@ -22,7 +22,7 @@ app.get('/search', async (req, res) => {
   const { from, to } = req.query; 
 
   if (!from || !to) {
-    return res.status(400).json({ error: "Parameter 'from' dan 'to' wajib disi." });
+    return res.status(400).json({ error: "Parameter 'from' dan 'to' wajib diisi." });
   }
 
   // Query "Final Boss" v1.0
