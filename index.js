@@ -5,7 +5,6 @@ const cors = require('cors'); // <-- WAJIB ADA untuk hosting
 const app = express();
 
 // 2. Aktifkan CORS
-// Ini mengizinkan aplikasi Flutter Anda memanggil API ini
 app.use(cors());
 
 // 3. Hubungkan ke Database Railway (Otomatis)
