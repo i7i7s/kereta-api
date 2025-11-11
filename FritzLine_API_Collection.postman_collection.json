@@ -1,0 +1,226 @@
+{
+	"info": {
+		"_postman_id": "fritzline-api-2024",
+		"name": "FritzLine Railway API - Seat Booking",
+		"description": "Complete API collection for FritzLine Railway real-time seat booking system",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Search Trains (With Real Seat Availability)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/search?from=BD&to=GMR",
+					"host": ["{{base_url}}"],
+					"path": ["search"],
+					"query": [
+						{
+							"key": "from",
+							"value": "BD",
+							"description": "Kode stasiun asal (contoh: BD = Bandung)"
+						},
+						{
+							"key": "to",
+							"value": "GMR",
+							"description": "Kode stasiun tujuan (contoh: GMR = Gambir)"
+						}
+					]
+				},
+				"description": "Mencari kereta dari stasiun asal ke tujuan. Response menampilkan sisaTiket REAL dari database."
+			},
+			"response": []
+		},
+		{
+			"name": "2. Get Available Seats by Train ID",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/seats/KA1",
+					"host": ["{{base_url}}"],
+					"path": ["seats", "KA1"]
+				},
+				"description": "Mengambil semua kursi untuk kereta tertentu, grouped by gerbong. Menampilkan status is_booked untuk setiap kursi."
+			},
+			"response": []
+		},
+		{
+			"name": "3. Book Seats (Temporary Hold)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"id_kereta\": \"KA1\",\n  \"seat_ids\": [1, 2, 3]\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/seats/book",
+					"host": ["{{base_url}}"],
+					"path": ["seats", "book"]
+				},
+				"description": "Book kursi temporary (hold) sebelum pembayaran. Kursi akan di-hold selama 15 menit. Jika ada kursi yang sudah di-book orang lain, akan return error 409."
+			},
+			"response": []
+		},
+		{
+			"name": "4. Check Seats After Booking",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/seats/KA1",
+					"host": ["{{base_url}}"],
+					"path": ["seats", "KA1"]
+				},
+				"description": "Cek lagi kursi setelah booking. Kursi yang di-book harusnya is_booked = true dan booked_at terisi."
+			},
+			"response": []
+		},
+		{
+			"name": "5. Release Seats (Cancel/Timeout)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"seat_ids\": [1, 2, 3]\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/seats/release",
+					"host": ["{{base_url}}"],
+					"path": ["seats", "release"]
+				},
+				"description": "Release kursi yang sudah di-hold. Digunakan jika user cancel atau timeout (15 menit)."
+			},
+			"response": []
+		},
+		{
+			"name": "6. Confirm Booking (After Payment)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"id_kereta\": \"KA1\",\n  \"seat_ids\": [1, 2, 3],\n  \"total_price\": 450000,\n  \"passenger_data\": [\n    {\n      \"nama\": \"John Doe\",\n      \"id_number\": \"3201234567890001\"\n    },\n    {\n      \"nama\": \"Jane Doe\",\n      \"id_number\": \"3201234567890002\"\n    },\n    {\n      \"nama\": \"Baby Doe\",\n      \"id_number\": \"3201234567890003\"\n    }\n  ]\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/bookings/confirm",
+					"host": ["{{base_url}}"],
+					"path": ["bookings", "confirm"]
+				},
+				"description": "Konfirmasi booking setelah pembayaran sukses. Data masuk ke tabel bookings dengan status_pembayaran = 'paid'. Return kode_booking untuk tracking."
+			},
+			"response": []
+		},
+		{
+			"name": "7. Get Booking History",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/bookings/history/FK1731254789ABC12",
+					"host": ["{{base_url}}"],
+					"path": ["bookings", "history", "FK1731254789ABC12"]
+				},
+				"description": "Mengambil detail booking berdasarkan kode_booking. Menampilkan semua kursi yang di-book, data penumpang, dan info kereta."
+			},
+			"response": []
+		},
+		{
+			"name": "8. Search Trains - Alternative Route (YK to SB)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/search?from=YK&to=SB",
+					"host": ["{{base_url}}"],
+					"path": ["search"],
+					"query": [
+						{
+							"key": "from",
+							"value": "YK",
+							"description": "Yogyakarta"
+						},
+						{
+							"key": "to",
+							"value": "SB",
+							"description": "Surabaya"
+						}
+					]
+				},
+				"description": "Test route lain: Yogyakarta ke Surabaya"
+			},
+			"response": []
+		},
+		{
+			"name": "9. Try Book Already Booked Seats (Error Test)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"id_kereta\": \"KA1\",\n  \"seat_ids\": [1, 2, 3]\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/seats/book",
+					"host": ["{{base_url}}"],
+					"path": ["seats", "book"]
+				},
+				"description": "Test booking kursi yang sudah di-book. Harusnya return error 409 dengan message 'Kursi sudah dibooking oleh pengguna lain'."
+			},
+			"response": []
+		},
+		{
+			"name": "10. Book Different Seats (Success Test)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"id_kereta\": \"KA1\",\n  \"seat_ids\": [4, 5, 6]\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/seats/book",
+					"host": ["{{base_url}}"],
+					"path": ["seats", "book"]
+				},
+				"description": "Book kursi yang berbeda (yang masih available). Harusnya sukses."
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "https://kereta-api-production.up.railway.app",
+			"type": "string"
+		}
+	]
+}
