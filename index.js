@@ -19,11 +19,14 @@ const dbPool = mysql.createPool({
 
 // 4. Endpoint API untuk mencari kereta
 app.get('/search', async (req, res) => {
-  const { from, to } = req.query; 
+  const { from, to, date } = req.query; 
 
   if (!from || !to) {
     return res.status(400).json({ error: "Parameter 'from' dan 'to' wajib diisi." });
   }
+
+  // Default tanggal = hari ini jika tidak disediakan
+  const tanggalKeberangkatan = date || new Date().toISOString().split('T')[0];
 
   const sqlQuery = `
     SELECT 
@@ -65,13 +68,19 @@ app.get('/search', async (req, res) => {
       const jam = Math.floor(durasiMenit / 60);
       const menit = durasiMenit % 60;
       
-      // Hitung sisa tiket REAL dari database
+      // Hitung sisa tiket REAL dari database berdasarkan tanggal
       const [seatCount] = await dbPool.query(`
-        SELECT COUNT(*) as total_seats,
-               SUM(CASE WHEN is_booked = 0 THEN 1 ELSE 0 END) as available_seats
-        FROM seats 
-        WHERE id_kereta = ?
-      `, [train.id_kereta]);
+        SELECT 
+          COUNT(s.id_kursi) as total_seats,
+          COUNT(s.id_kursi) - COUNT(b.id_booking) as available_seats
+        FROM seats s
+        LEFT JOIN bookings b 
+          ON s.id_kursi = b.id_kursi 
+          AND s.id_kereta = b.id_kereta
+          AND b.tanggal_keberangkatan = ?
+          AND b.status_pembayaran IN ('pending', 'paid')
+        WHERE s.id_kereta = ?
+      `, [tanggalKeberangkatan, train.id_kereta]);
       
       const sisaTiket = seatCount[0]?.available_seats || 0;
       
@@ -98,22 +107,31 @@ app.get('/search', async (req, res) => {
 // 5. NEW ENDPOINT: Get available seats untuk kereta tertentu
 app.get('/seats/:id_kereta', async (req, res) => {
   const { id_kereta } = req.params;
+  const { date } = req.query;
+  
+  // Default tanggal = hari ini jika tidak disediakan
+  const tanggalKeberangkatan = date || new Date().toISOString().split('T')[0];
   
   try {
-    // Ambil semua kursi untuk kereta ini
+    // Ambil semua kursi dan status booking untuk tanggal tertentu
     const [seats] = await dbPool.query(`
       SELECT 
-        id_kursi,
-        id_kereta,
-        nama_gerbong,
-        nomor_kursi,
-        is_booked,
-        booked_at,
-        gender
-      FROM seats 
-      WHERE id_kereta = ?
-      ORDER BY nama_gerbong, nomor_kursi
-    `, [id_kereta]);
+        s.id_kursi,
+        s.id_kereta,
+        s.nama_gerbong,
+        s.nomor_kursi,
+        CASE WHEN b.id_booking IS NOT NULL THEN 1 ELSE 0 END as is_booked,
+        b.created_at as booked_at,
+        b.gender
+      FROM seats s
+      LEFT JOIN bookings b 
+        ON s.id_kursi = b.id_kursi 
+        AND s.id_kereta = b.id_kereta
+        AND b.tanggal_keberangkatan = ?
+        AND b.status_pembayaran IN ('pending', 'paid')
+      WHERE s.id_kereta = ?
+      ORDER BY s.nama_gerbong, s.nomor_kursi
+    `, [tanggalKeberangkatan, id_kereta]);
 
     // Group seats by gerbong untuk kemudahan di Flutter
     const groupedSeats = {};
@@ -132,6 +150,7 @@ app.get('/seats/:id_kereta', async (req, res) => {
 
     res.json({
       id_kereta: id_kereta,
+      tanggal_keberangkatan: tanggalKeberangkatan,
       total_seats: seats.length,
       available_seats: seats.filter(s => s.is_booked === 0).length,
       booked_seats: seats.filter(s => s.is_booked === 1).length,
@@ -146,11 +165,17 @@ app.get('/seats/:id_kereta', async (req, res) => {
 
 // 6. NEW ENDPOINT: Book seats (temporary hold)
 app.post('/seats/book', async (req, res) => {
-  const { id_kereta, seat_ids } = req.body;
+  const { id_kereta, seat_ids, tanggal_keberangkatan, seat_details } = req.body;
   
   if (!id_kereta || !seat_ids || !Array.isArray(seat_ids) || seat_ids.length === 0) {
     return res.status(400).json({ 
       error: "Parameter 'id_kereta' dan 'seat_ids' (array) wajib diisi." 
+    });
+  }
+
+  if (!tanggal_keberangkatan) {
+    return res.status(400).json({ 
+      error: "Parameter 'tanggal_keberangkatan' wajib diisi (format: YYYY-MM-DD)." 
     });
   }
 
@@ -159,45 +184,61 @@ app.post('/seats/book', async (req, res) => {
     connection = await dbPool.getConnection();
     await connection.beginTransaction();
 
-    // Check apakah semua kursi masih available
+    // Check apakah semua kursi masih available untuk tanggal tersebut
     const placeholders = seat_ids.map(() => '?').join(',');
     const [seatCheck] = await connection.query(`
-      SELECT id_kursi, nomor_kursi, is_booked 
-      FROM seats 
-      WHERE id_kursi IN (${placeholders}) AND id_kereta = ?
+      SELECT 
+        s.id_kursi, 
+        s.nomor_kursi, 
+        CASE WHEN b.id_booking IS NOT NULL THEN 1 ELSE 0 END as is_booked
+      FROM seats s
+      LEFT JOIN bookings b 
+        ON s.id_kursi = b.id_kursi 
+        AND s.id_kereta = b.id_kereta
+        AND b.tanggal_keberangkatan = ?
+        AND b.status_pembayaran IN ('pending', 'paid')
+      WHERE s.id_kursi IN (${placeholders}) AND s.id_kereta = ?
       FOR UPDATE
-    `, [...seat_ids, id_kereta]);
+    `, [tanggal_keberangkatan, ...seat_ids, id_kereta]);
 
     // Validasi: apakah ada kursi yang sudah di-book?
     const alreadyBooked = seatCheck.filter(s => s.is_booked === 1);
     if (alreadyBooked.length > 0) {
       await connection.rollback();
       return res.status(409).json({ 
-        error: "Kursi sudah dibooking oleh pengguna lain",
+        error: "Kursi sudah dibooking oleh pengguna lain untuk tanggal tersebut",
         booked_seats: alreadyBooked.map(s => s.nomor_kursi)
       });
     }
 
-    // Update kursi menjadi booked
-    // If frontend provides seat_details with gender, update per-seat
-    if (Array.isArray(req.body.seat_details) && req.body.seat_details.length > 0) {
-      // update per seat with gender if provided
-      for (const sid of seat_ids) {
-        const detail = req.body.seat_details.find(d => d.id_kursi === sid) || {};
-        const gender = detail.gender || null;
-        await connection.query(`
-          UPDATE seats
-          SET is_booked = 1, booked_at = NOW(), gender = ?
-          WHERE id_kursi = ? AND id_kereta = ?
-        `, [gender, sid, id_kereta]);
-      }
-    } else {
-      // bulk update without gender
+    // Insert booking records (temporary hold dengan status pending)
+    for (const sid of seat_ids) {
+      const detail = seat_details?.find(d => d.id_kursi === sid) || {};
+      const gender = detail.gender || null;
+      
       await connection.query(`
-        UPDATE seats 
-        SET is_booked = 1, booked_at = NOW()
-        WHERE id_kursi IN (${placeholders})
-      `, seat_ids);
+        INSERT INTO bookings (
+          id_kereta,
+          tanggal_keberangkatan,
+          id_kursi,
+          kode_booking,
+          nama_penumpang,
+          id_number,
+          total_harga,
+          status_pembayaran,
+          gender,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NOW())
+      `, [
+        id_kereta,
+        tanggal_keberangkatan,
+        sid,
+        `TEMP-${Date.now()}-${sid}`, // Temporary booking code
+        'PENDING',
+        '0000000000000000',
+        0,
+        gender
+      ]);
     }
 
     await connection.commit();
@@ -219,7 +260,7 @@ app.post('/seats/book', async (req, res) => {
 
 // 7. NEW ENDPOINT: Release seats (jika pembayaran gagal/timeout)
 app.post('/seats/release', async (req, res) => {
-  const { seat_ids } = req.body;
+  const { seat_ids, tanggal_keberangkatan } = req.body;
   
   if (!seat_ids || !Array.isArray(seat_ids) || seat_ids.length === 0) {
     return res.status(400).json({ 
@@ -227,14 +268,21 @@ app.post('/seats/release', async (req, res) => {
     });
   }
 
+  if (!tanggal_keberangkatan) {
+    return res.status(400).json({ 
+      error: "Parameter 'tanggal_keberangkatan' wajib diisi." 
+    });
+  }
+
   try {
     const placeholders = seat_ids.map(() => '?').join(',');
-    // When releasing seats, also clear gender to avoid leaking info
+    // Delete pending bookings untuk kursi dan tanggal tersebut
     await dbPool.query(`
-      UPDATE seats 
-      SET is_booked = 0, booked_at = NULL, gender = NULL
+      DELETE FROM bookings
       WHERE id_kursi IN (${placeholders})
-    `, seat_ids);
+        AND tanggal_keberangkatan = ?
+        AND status_pembayaran = 'pending'
+    `, [...seat_ids, tanggal_keberangkatan]);
 
     res.json({ 
       success: true, 
@@ -251,16 +299,17 @@ app.post('/seats/release', async (req, res) => {
 // 8. NEW ENDPOINT: Confirm booking (setelah pembayaran sukses)
 app.post('/bookings/confirm', async (req, res) => {
   const { 
-    id_kereta, 
+    id_kereta,
+    tanggal_keberangkatan,
     seat_ids, 
     passenger_data,
     total_price,
     kode_booking 
   } = req.body;
 
-  if (!id_kereta || !seat_ids || !passenger_data || !total_price) {
+  if (!id_kereta || !tanggal_keberangkatan || !seat_ids || !passenger_data || !total_price) {
     return res.status(400).json({ 
-      error: "Data booking tidak lengkap" 
+      error: "Data booking tidak lengkap (perlu: id_kereta, tanggal_keberangkatan, seat_ids, passenger_data, total_price)" 
     });
   }
 
@@ -272,30 +321,68 @@ app.post('/bookings/confirm', async (req, res) => {
     // Generate kode booking jika belum ada
     const bookingCode = kode_booking || `FK${Date.now()}${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
 
-    // Insert ke tabel bookings untuk setiap kursi
+    // Update existing pending bookings menjadi paid dengan data lengkap
+    // atau Insert baru jika belum ada
     for (let i = 0; i < seat_ids.length; i++) {
       const passenger = passenger_data[i];
       const seat_id = seat_ids[i];
+      const gender = passenger.gender || null;
 
-      await connection.query(`
-        INSERT INTO bookings (
-          id_kereta, 
-          id_kursi, 
-          kode_booking,
-          nama_penumpang,
-          id_number,
-          total_harga,
-          status_pembayaran,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'paid', NOW())
-      `, [
-        id_kereta,
-        seat_id,
-        bookingCode,
-        passenger.nama,
-        passenger.id_number,
-        total_price / seat_ids.length // Harga per kursi
-      ]);
+      // Cek apakah sudah ada pending booking
+      const [existing] = await connection.query(`
+        SELECT id_booking FROM bookings
+        WHERE id_kursi = ? 
+          AND id_kereta = ?
+          AND tanggal_keberangkatan = ?
+          AND status_pembayaran = 'pending'
+        LIMIT 1
+      `, [seat_id, id_kereta, tanggal_keberangkatan]);
+
+      if (existing.length > 0) {
+        // Update existing pending booking
+        await connection.query(`
+          UPDATE bookings
+          SET kode_booking = ?,
+              nama_penumpang = ?,
+              id_number = ?,
+              total_harga = ?,
+              gender = ?,
+              status_pembayaran = 'paid'
+          WHERE id_booking = ?
+        `, [
+          bookingCode,
+          passenger.nama,
+          passenger.id_number,
+          total_price / seat_ids.length,
+          gender,
+          existing[0].id_booking
+        ]);
+      } else {
+        // Insert new booking (direct confirm tanpa hold)
+        await connection.query(`
+          INSERT INTO bookings (
+            id_kereta,
+            tanggal_keberangkatan,
+            id_kursi, 
+            kode_booking,
+            nama_penumpang,
+            id_number,
+            total_harga,
+            gender,
+            status_pembayaran,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'paid', NOW())
+        `, [
+          id_kereta,
+          tanggal_keberangkatan,
+          seat_id,
+          bookingCode,
+          passenger.nama,
+          passenger.id_number,
+          total_price / seat_ids.length,
+          gender
+        ]);
+      }
     }
 
     await connection.commit();
@@ -352,11 +439,12 @@ app.get('/bookings/history/:kode_booking', async (req, res) => {
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server API FritzLine berjalan di port ${port}`);
+  console.log(`✅ Date-based booking system enabled`);
   console.log(`Endpoints tersedia:`);
-  console.log(`  GET  /search?from=X&to=Y - Cari kereta`);
-  console.log(`  GET  /seats/:id_kereta - Get kursi available`);
-  console.log(`  POST /seats/book - Book kursi (temporary)`);
-  console.log(`  POST /seats/release - Release kursi`);
-  console.log(`  POST /bookings/confirm - Konfirmasi booking`);
+  console.log(`  GET  /search?from=X&to=Y&date=YYYY-MM-DD - Cari kereta (date optional, default: today)`);
+  console.log(`  GET  /seats/:id_kereta?date=YYYY-MM-DD - Get kursi available (date optional, default: today)`);
+  console.log(`  POST /seats/book - Book kursi (require: tanggal_keberangkatan)`);
+  console.log(`  POST /seats/release - Release kursi (require: tanggal_keberangkatan)`);
+  console.log(`  POST /bookings/confirm - Konfirmasi booking (require: tanggal_keberangkatan)`);
   console.log(`  GET  /bookings/history/:kode_booking - Get history booking`);
 });
