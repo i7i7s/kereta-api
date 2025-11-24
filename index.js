@@ -108,7 +108,8 @@ app.get('/seats/:id_kereta', async (req, res) => {
         nama_gerbong,
         nomor_kursi,
         is_booked,
-        booked_at
+        booked_at,
+        gender
       FROM seats 
       WHERE id_kereta = ?
       ORDER BY nama_gerbong, nomor_kursi
@@ -124,7 +125,8 @@ app.get('/seats/:id_kereta', async (req, res) => {
         id_kursi: seat.id_kursi,
         nomor_kursi: seat.nomor_kursi,
         is_booked: seat.is_booked === 1,
-        booked_at: seat.booked_at
+        booked_at: seat.booked_at,
+        gender: seat.gender // may be null
       });
     });
 
@@ -177,11 +179,26 @@ app.post('/seats/book', async (req, res) => {
     }
 
     // Update kursi menjadi booked
-    await connection.query(`
-      UPDATE seats 
-      SET is_booked = 1, booked_at = NOW()
-      WHERE id_kursi IN (${placeholders})
-    `, seat_ids);
+    // If frontend provides seat_details with gender, update per-seat
+    if (Array.isArray(req.body.seat_details) && req.body.seat_details.length > 0) {
+      // update per seat with gender if provided
+      for (const sid of seat_ids) {
+        const detail = req.body.seat_details.find(d => d.id_kursi === sid) || {};
+        const gender = detail.gender || null;
+        await connection.query(`
+          UPDATE seats
+          SET is_booked = 1, booked_at = NOW(), gender = ?
+          WHERE id_kursi = ? AND id_kereta = ?
+        `, [gender, sid, id_kereta]);
+      }
+    } else {
+      // bulk update without gender
+      await connection.query(`
+        UPDATE seats 
+        SET is_booked = 1, booked_at = NOW()
+        WHERE id_kursi IN (${placeholders})
+      `, seat_ids);
+    }
 
     await connection.commit();
 
@@ -212,9 +229,10 @@ app.post('/seats/release', async (req, res) => {
 
   try {
     const placeholders = seat_ids.map(() => '?').join(',');
+    // When releasing seats, also clear gender to avoid leaking info
     await dbPool.query(`
       UPDATE seats 
-      SET is_booked = 0, booked_at = NULL
+      SET is_booked = 0, booked_at = NULL, gender = NULL
       WHERE id_kursi IN (${placeholders})
     `, seat_ids);
 

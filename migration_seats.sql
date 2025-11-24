@@ -15,6 +15,10 @@ ADD COLUMN booked_at DATETIME NULL COMMENT 'Timestamp saat kursi di-book';
 ALTER TABLE seats ADD INDEX IF NOT EXISTS idx_is_booked (is_booked);
 ALTER TABLE seats ADD INDEX IF NOT EXISTS idx_id_kereta_booked (id_kereta, is_booked);
 
+-- Add gender column for passenger gender visualization
+ALTER TABLE seats DROP COLUMN IF EXISTS gender;
+ALTER TABLE seats ADD COLUMN gender VARCHAR(20) DEFAULT NULL;
+
 -- 2. Update tabel bookings untuk struktur yang lebih lengkap
 -- Cek apakah tabel bookings sudah ada
 CREATE TABLE IF NOT EXISTS bookings (
